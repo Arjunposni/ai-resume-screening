@@ -1,0 +1,25 @@
+[project]
+name = "ai-resume-screening"
+version = "0.1.0"
+description = "AI-powered resume screening and candidate shortlisting with fairness-aware ML and explainable AI."
+readme = "README.md"
+requires-python = ">=3.14,<3.15"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "streamlit",
+    "pydantic",
+    "python-dotenv",
+    "pymupdf",
+    "python-docx",
+    "spacy",
+    "sentence-transformers",
+    "scikit-learn",
+    "fairlearn",
+    "shap",
+    "pandas",
+    "numpy",
+]
+
+[tool.uv]
+package = false
