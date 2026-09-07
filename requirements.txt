@@ -1,0 +1,14 @@
+fastapi
+uvicorn[standard]
+streamlit
+pydantic
+python-dotenv
+pymupdf
+python-docx
+spacy
+sentence-transformers
+scikit-learn
+fairlearn
+shap
+pandas
+numpy
