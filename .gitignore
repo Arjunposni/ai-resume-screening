@@ -1,17 +1,40 @@
 __pycache__/
 *.py[cod]
+
 .venv/
 venv/
+
 .env
+.env.*
+!.env.example
+
+# Local databases
 *.db
 *.sqlite
 *.sqlite3
+
+# Generated/model artifacts
 *.pkl
-*.joblib
 *.pt
+
+# Model files are required for deployment
+*.joblib
+!models/
+!models/*.joblib
+!models/.gitkeep
+
+# Uploaded resumes / private data
 uploads/
+data/uploads/
 data/resumes/
 data/private/
+
+# Local test datasets
+synthetic_resume_test_set_100 (1)/
+tests/resumes/
+tests/resumes_backup
+
+# IDE / OS
 .vscode/
 .idea/
 .DS_Store

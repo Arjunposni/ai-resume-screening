@@ -1,0 +1,161 @@
+{
+  "dataset": {
+    "total_candidates": 100,
+    "total_features": 5,
+    "selected_candidates": 44,
+    "not_selected_candidates": 56,
+    "protected_groups": [
+      "A",
+      "B"
+    ]
+  },
+  "class_distribution": {
+    "not_selected": 56,
+    "selected": 44,
+    "not_selected_percentage": 56.0,
+    "selected_percentage": 44.0
+  },
+  "feature_summary": {
+    "required_skill_score": {
+      "mean": 72.46,
+      "median": 76.0,
+      "minimum": 41.0,
+      "maximum": 100.0,
+      "standard_deviation": 17.26
+    },
+    "experience_score": {
+      "mean": 69.69,
+      "median": 69.0,
+      "minimum": 40.0,
+      "maximum": 99.0,
+      "standard_deviation": 17.94
+    },
+    "education_score": {
+      "mean": 74.18,
+      "median": 73.0,
+      "minimum": 50.0,
+      "maximum": 100.0,
+      "standard_deviation": 14.76
+    },
+    "semantic_score": {
+      "mean": 73.48,
+      "median": 74.5,
+      "minimum": 46.0,
+      "maximum": 100.0,
+      "standard_deviation": 16.2
+    },
+    "preferred_skill_score": {
+      "mean": 56.47,
+      "median": 54.5,
+      "minimum": 20.0,
+      "maximum": 100.0,
+      "standard_deviation": 23.26
+    }
+  },
+  "selection_analysis": {
+    "not_selected": {
+      "required_skill_score": 65.02,
+      "experience_score": 66.68,
+      "education_score": 73.43,
+      "semantic_score": 71.39,
+      "preferred_skill_score": 55.62
+    },
+    "selected": {
+      "required_skill_score": 81.93,
+      "experience_score": 73.52,
+      "education_score": 75.14,
+      "semantic_score": 76.14,
+      "preferred_skill_score": 57.55
+    },
+    "selected_minus_not_selected": {
+      "required_skill_score": 16.91,
+      "experience_score": 6.84,
+      "education_score": 1.71,
+      "semantic_score": 4.74,
+      "preferred_skill_score": 1.92
+    }
+  },
+  "protected_group_analysis": {
+    "A": {
+      "candidate_count": 60,
+      "selected_count": 27,
+      "not_selected_count": 33,
+      "selection_rate": 0.45,
+      "selection_rate_percentage": 45.0
+    },
+    "B": {
+      "candidate_count": 40,
+      "selected_count": 17,
+      "not_selected_count": 23,
+      "selection_rate": 0.425,
+      "selection_rate_percentage": 42.5
+    },
+    "selection_rate_difference": 0.025
+  },
+  "correlation_analysis": {
+    "feature_target_correlation": {
+      "required_skill_score": 0.4888,
+      "experience_score": 0.1904,
+      "education_score": 0.0577,
+      "semantic_score": 0.1461,
+      "preferred_skill_score": 0.0412
+    },
+    "matrix": {
+      "required_skill_score": {
+        "required_skill_score": 1.0,
+        "experience_score": -0.001,
+        "education_score": -0.193,
+        "semantic_score": -0.1165,
+        "preferred_skill_score": -0.0047,
+        "selected": 0.4888
+      },
+      "experience_score": {
+        "required_skill_score": -0.001,
+        "experience_score": 1.0,
+        "education_score": 0.0305,
+        "semantic_score": 0.0959,
+        "preferred_skill_score": 0.0015,
+        "selected": 0.1904
+      },
+      "education_score": {
+        "required_skill_score": -0.193,
+        "experience_score": 0.0305,
+        "education_score": 1.0,
+        "semantic_score": -0.0042,
+        "preferred_skill_score": -0.1078,
+        "selected": 0.0577
+      },
+      "semantic_score": {
+        "required_skill_score": -0.1165,
+        "experience_score": 0.0959,
+        "education_score": -0.0042,
+        "semantic_score": 1.0,
+        "preferred_skill_score": -0.1141,
+        "selected": 0.1461
+      },
+      "preferred_skill_score": {
+        "required_skill_score": -0.0047,
+        "experience_score": 0.0015,
+        "education_score": -0.1078,
+        "semantic_score": -0.1141,
+        "preferred_skill_score": 1.0,
+        "selected": 0.0412
+      },
+      "selected": {
+        "required_skill_score": 0.4888,
+        "experience_score": 0.1904,
+        "education_score": 0.0577,
+        "semantic_score": 0.1461,
+        "preferred_skill_score": 0.0412,
+        "selected": 1.0
+      }
+    }
+  },
+  "generated_plots": [
+    "data\\evaluation\\eda\\class_distribution.png",
+    "data\\evaluation\\eda\\feature_distributions.png",
+    "data\\evaluation\\eda\\feature_vs_selection.png",
+    "data\\evaluation\\eda\\protected_group_selection.png",
+    "data\\evaluation\\eda\\correlation_matrix.png"
+  ]
+}
