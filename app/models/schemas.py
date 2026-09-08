@@ -61,3 +61,36 @@ class CandidateProfile(BaseModel):
     projects: list[Project] = Field(default_factory=list)
 
     total_experience_months: int = 0
+
+
+class EducationRequirement(BaseModel):
+    """A single education requirement extracted from a job description."""
+
+    degree: str
+    field_of_study: str | None = None
+    required: bool = True
+
+
+class JobDescription(BaseModel):
+    """
+    Structured representation of a job description.
+
+    required_skills and preferred_skills are kept as separate fields
+    (rather than one skills list with a flag) so that scoring weights
+    can be applied independently and unambiguously downstream —
+    required skills must carry more weight than preferred skills.
+    """
+
+    title: str
+    raw_text: str
+
+    required_skills: list[str] = Field(default_factory=list)
+    preferred_skills: list[str] = Field(default_factory=list)
+
+    min_experience_years: float | None = None
+
+    education_requirements: list[EducationRequirement] = Field(default_factory=list)
+
+    required_certifications: list[str] = Field(default_factory=list)
+
+    other_requirements: list[str] = Field(default_factory=list)

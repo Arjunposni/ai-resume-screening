@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 
 from app.api.resumes import router as resume_router
-
+from app.api.jobs import router as jobs_router
 
 app = FastAPI(
     title="AI-Powered Resume Screening API",
@@ -10,6 +10,7 @@ app = FastAPI(
 
 
 app.include_router(resume_router)
+app.include_router(jobs_router)
 
 
 @app.get("/health")
