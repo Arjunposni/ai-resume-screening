@@ -5,7 +5,7 @@ Production-ready Streamlit frontend for the resume-screening project.
 
 Design goals
 ------------
-- Real FastAPI integration for JD parsing and resume processing.
+- Native Streamlit processing for JD parsing and resume screening.
 - Dynamic candidate count: works with 1, 10, 100+ uploaded resumes.
 - Backend response normalization so UI is resilient to small API changes.
 - Demo mode retained only as an explicit fallback/testing option.
@@ -25,7 +25,7 @@ Environment
     SHORTLIST_THRESHOLD=75
     ENABLE_DEMO_MODE=true
 
-The backend API contracts currently used by this UI are:
+The previous backend API contracts are retained only for the FastAPI application:
     POST /jobs/parse
     POST /resumes/upload
     POST /screening/match
@@ -70,6 +70,12 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import train_test_split
 from dotenv import load_dotenv
+
+from app.services.streamlit_screening import (
+    parse_job_description,
+    process_resume,
+    screen_candidate,
+)
 
 
 # SHAP/Fairness are loaded defensively so the dashboard can still start
@@ -906,13 +912,7 @@ def normalize_screening_result(
 def process_uploaded_resumes(
     uploaded_files: list[Any],
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
-    """
-    Screen all selected resumes through the backend batch endpoint.
-
-    The backend performs parsing, anonymization, feature extraction, matching,
-    ML prediction, explainability and persistence as one batch operation.
-    A small normalization layer converts the response into the dashboard shape.
-    """
+    """Process resumes directly inside Streamlit without FastAPI."""
     if not uploaded_files:
         return [], []
 
@@ -924,144 +924,63 @@ def process_uploaded_resumes(
             }
         ]
 
-    progress = st.progress(0.0)
-    status = st.empty()
-    status.write(f"Submitting {len(uploaded_files)} resume(s) to batch screening...")
-
-    # The batch endpoint expects the original JD text as a multipart form field.
-    batch_response = backend.screen_batch(
-        job_description=st.session_state.job_description,
-        uploaded_files=uploaded_files,
-    )
-
-    progress.progress(1.0)
-    status.empty()
-
-    if "error" in batch_response:
-        return [], [
-            {
-                "candidate": "Batch screening",
-                "error": str(batch_response["error"]),
-            }
-        ]
-
-    raw_results = batch_response.get("results", [])
-    if not isinstance(raw_results, list):
-        raw_results = []
-
-    uploaded_by_name = {
-        str(uploaded_file.name): uploaded_file for uploaded_file in uploaded_files
-    }
-
     results: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
 
-    for index, raw in enumerate(raw_results):
-        if not isinstance(raw, dict):
-            errors.append(
-                {
-                    "candidate": f"candidate-{index + 1}",
-                    "error": "Backend returned an invalid batch result.",
-                }
+    progress = st.progress(0.0)
+    status = st.empty()
+
+    total = len(uploaded_files)
+
+    for index, uploaded_file in enumerate(uploaded_files, start=1):
+        filename = str(uploaded_file.name)
+
+        try:
+            status.write(f"Processing {index}/{total}: {filename}")
+
+            resume_payload = process_resume(
+                filename,
+                uploaded_file.getvalue(),
             )
-            continue
 
-        filename = str(
-            first_value(
-                raw,
-                "filename",
-                "candidate",
-                "resume_filename",
-                default=f"candidate-{index + 1}",
+            raw_result = screen_candidate(
+                candidate_data=resume_payload["candidate_profile"].model_dump(),
+                job_data=st.session_state.parsed_jd,
+                candidate_text=resume_payload["candidate_text"],
+                candidate_id=resume_payload["resume_id"],
             )
-        )
 
-        # The batch backend may already return a candidate profile. Keep it if
-        # present; otherwise use an empty profile rather than making a second
-        # screening request.
-        candidate_profile = raw.get("candidate_profile", {})
-        if not isinstance(candidate_profile, dict):
-            candidate_profile = {}
+            normalized = normalize_screening_result(
+                raw=raw_result,
+                filename=filename,
+                resume_payload=resume_payload,
+            )
 
-        resume_payload = {
-            "candidate_profile": candidate_profile,
-            "resume_id": raw.get("candidate_id") or raw.get("resume_id"),
-            "filename": filename,
-        }
+            normalized["run_id"] = raw_result.get("run_id")
+            normalized["job_id"] = raw_result.get("job_id")
+            normalized["candidate_id"] = raw_result.get("candidate_id")
+            normalized["source_filename"] = filename
 
-        normalized = normalize_screening_result(
-            raw=raw,
-            filename=filename,
-            resume_payload=resume_payload,
-        )
+            results.append(normalized)
 
-        # Preserve batch-level identifiers/metadata.
-        for key in (
-            "run_id",
-            "job_id",
-            "candidate_id",
-            "rank",
-            "status",
-            "error",
-        ):
-            if key in raw:
-                normalized[key] = raw[key]
-
-        if raw.get("error"):
+        except Exception as exc:
             errors.append(
                 {
                     "candidate": filename,
-                    "error": str(raw["error"]),
+                    "error": str(exc),
                 }
             )
-        else:
-            results.append(normalized)
 
-    # Some backend versions may return failed candidates separately.
-    raw_failures = batch_response.get("failures", [])
-    if isinstance(raw_failures, list):
-        for failure in raw_failures:
-            if isinstance(failure, dict):
-                errors.append(
-                    {
-                        "candidate": str(
-                            first_value(
-                                failure,
-                                "filename",
-                                "candidate",
-                                default="Unknown",
-                            )
-                        ),
-                        "error": str(
-                            first_value(
-                                failure,
-                                "error",
-                                "message",
-                                default="Unknown batch processing error",
-                            )
-                        ),
-                    }
-                )
-            else:
-                errors.append(
-                    {
-                        "candidate": "Unknown",
-                        "error": str(failure),
-                    }
-                )
+        progress.progress(index / total)
 
-    # If the backend doesn't echo filenames in its result objects, align the
-    # available profiles/files by position where possible.
-    if results:
-        for result in results:
-            name = str(result.get("candidate", ""))
-            if name in uploaded_by_name:
-                result["source_filename"] = name
+    status.empty()
 
-    results.sort(key=lambda item: safe_float(item.get("score")), reverse=True)
+    results.sort(
+        key=lambda item: safe_float(item.get("score")),
+        reverse=True,
+    )
 
     return results, errors
-
 
 def load_fairness_results() -> dict[str, Any] | None:
     if not EVALUATION_FILE.exists():
@@ -1333,20 +1252,14 @@ with st.sidebar:
 
     st.divider()
     st.markdown("### System Status")
-    healthy, health_message = backend.health()
-
-    if healthy:
-        st.success("Backend Online")
-        st.caption(BACKEND_URL)
-    else:
-        st.warning("Backend Offline")
-        st.caption(health_message)
+    st.success("Streamlit Native")
+    st.caption("All screening services run inside the Streamlit application.")
 
     st.divider()
     st.markdown("### Data Source")
     source = st.session_state.data_source
-    if source == "Backend":
-        st.success("Live FastAPI")
+    if source == "Streamlit":
+        st.success("Streamlit Native")
     elif source == "Demo":
         st.info("Frontend Demo")
     else:
@@ -1399,17 +1312,16 @@ if selected_page == "Dashboard":
             use_container_width=True,
             disabled=not bool(job_text.strip()),
         ):
-            with st.spinner("Parsing job description with FastAPI..."):
-                parsed = backend.parse_job(job_text)
-
-            if "error" in parsed:
-                st.session_state.job_parsed = False
-                st.session_state.parsed_jd = None
-                st.error(f"JD parsing failed: {parsed['error']}")
-            else:
-                st.session_state.job_parsed = True
-                st.session_state.parsed_jd = parsed
-                st.success("✓ Job description parsed by FastAPI.")
+            with st.spinner("Parsing job description..."):
+                try:
+                    parsed = parse_job_description(job_text)
+                    st.session_state.job_parsed = True
+                    st.session_state.parsed_jd = parsed
+                    st.success("? Job description parsed successfully.")
+                except Exception as exc:
+                    st.session_state.job_parsed = False
+                    st.session_state.parsed_jd = None
+                    st.error(f"JD parsing failed: {exc}")
 
     with jd_col2:
         if st.session_state.job_parsed:
@@ -1451,7 +1363,7 @@ if selected_page == "Dashboard":
     # Resume upload
     st.markdown('<div class="section-title">2️⃣ Candidate Resumes</div>', unsafe_allow_html=True)
     st.caption(
-        "Batch mode sends all selected resumes to FastAPI in one request. "
+        "All selected resumes are processed directly inside Streamlit. "
         "The backend creates one screening run and ranks the candidates."
     )
 
@@ -1459,7 +1371,7 @@ if selected_page == "Dashboard":
         "Upload candidate resumes",
         type=["pdf", "docx"],
         accept_multiple_files=True,
-        help="Upload one or more PDF or DOCX resumes. The backend processes every selected file.",
+        help="Upload one or more PDF or DOCX resumes. Streamlit processes every selected file.",
     )
 
     if uploaded_files:
@@ -1477,14 +1389,14 @@ if selected_page == "Dashboard":
             disabled=not can_process,
         ):
             with st.spinner(
-                f"Running batch screening for {len(uploaded_files)} resume(s)..."
+                f"Running screening for {len(uploaded_files)} resume(s)..."
             ):
                 results, errors = process_uploaded_resumes(uploaded_files)
 
             st.session_state.screening_results = results
             st.session_state.backend_resume_results = results
             st.session_state.screening_errors = errors
-            st.session_state.data_source = "Backend"
+            st.session_state.data_source = "Streamlit"
 
             if results:
                 st.success(
@@ -1593,7 +1505,7 @@ elif selected_page == "Candidates":
     results = st.session_state.screening_results
 
     if not results:
-        st.info("No screening results available. Run a backend screening from the Dashboard.")
+        st.info("No screening results available. Run screening from the Dashboard.")
     else:
         candidate_names = [
             str(first_value(item, "candidate", "filename", default="Unknown"))
