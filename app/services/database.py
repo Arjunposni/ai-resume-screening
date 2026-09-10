@@ -1,8 +1,4 @@
-"""SQLite persistence layer for the resume screening application.
-
-The service is intentionally dependency-free (sqlite3 from the Python
-standard library) so it can be replaced by PostgreSQL later without changing
-the API contract.
+"""PostgreSQL persistence layer for the resume screening application.
 
 Stored data:
 - jobs / job descriptions
@@ -11,20 +7,29 @@ Stored data:
 - recruiter decisions and notes
 - audit events
 
-The database is created automatically on first use.
+The schema is created automatically on first use. Connection details come
+from the DATABASE_URL environment variable (see .env.example) rather than
+being hardcoded, so the same code works unchanged against a local dev
+database and the production Render Postgres instance.
 """
 
 from __future__ import annotations
 
 import json
-import sqlite3
+import os
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Iterator
 
+import psycopg
+from dotenv import load_dotenv
+from psycopg.rows import dict_row
 
-DEFAULT_DB_PATH = Path("data/app.db")
+# Loaded here (not just in main.py) because `database = Database()` below
+# runs at import time, which happens before main.py's own load_dotenv()
+# call - without this, DATABASE_URL from a local .env file wouldn't be
+# visible yet when the connection is first established.
+load_dotenv()
 
 
 def _utc_now() -> str:
@@ -35,26 +40,105 @@ def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, default=str)
 
 
-class Database:
-    """Small, safe SQLite repository for screening persistence."""
+# Split into individual statements (rather than one big script) because
+# psycopg sends each execute() call as a single command - unlike
+# sqlite3.executescript(), it doesn't run a semicolon-separated batch.
+SCHEMA_STATEMENTS: list[str] = [
+    """
+    CREATE TABLE IF NOT EXISTS jobs (
+        id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        job_id TEXT NOT NULL UNIQUE,
+        title TEXT NOT NULL DEFAULT '',
+        raw_text TEXT NOT NULL DEFAULT '',
+        parsed_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS candidates (
+        id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        candidate_id TEXT NOT NULL UNIQUE,
+        original_filename TEXT NOT NULL,
+        stored_filename TEXT,
+        file_type TEXT,
+        resume_path TEXT,
+        anonymized_text TEXT NOT NULL DEFAULT '',
+        profile_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS screening_runs (
+        id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        run_id TEXT NOT NULL UNIQUE,
+        job_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'completed',
+        candidate_count INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (job_id) REFERENCES jobs(job_id)
+            ON DELETE CASCADE
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS screening_results (
+        id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        candidate_id TEXT NOT NULL,
+        final_score REAL NOT NULL DEFAULT 0,
+        recommendation TEXT NOT NULL DEFAULT 'REVIEW',
+        ml_prediction INTEGER,
+        result_json TEXT NOT NULL DEFAULT '{}',
+        recruiter_decision TEXT,
+        recruiter_notes TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (run_id, candidate_id),
+        FOREIGN KEY (run_id) REFERENCES screening_runs(run_id)
+            ON DELETE CASCADE,
+        FOREIGN KEY (candidate_id) REFERENCES candidates(candidate_id)
+            ON DELETE CASCADE
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS audit_events (
+        id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        event_id TEXT NOT NULL UNIQUE,
+        event_type TEXT NOT NULL,
+        run_id TEXT,
+        candidate_id TEXT,
+        details_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_jobs_created_at ON jobs(created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_candidates_created_at ON candidates(created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_screening_results_run ON screening_results(run_id)",
+    "CREATE INDEX IF NOT EXISTS idx_screening_results_candidate ON screening_results(candidate_id)",
+    "CREATE INDEX IF NOT EXISTS idx_audit_events_run ON audit_events(run_id)",
+    "CREATE INDEX IF NOT EXISTS idx_audit_events_candidate ON audit_events(candidate_id)",
+]
 
-    def __init__(self, db_path: str | Path = DEFAULT_DB_PATH) -> None:
-        self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+
+class Database:
+    """Small, safe PostgreSQL repository for screening persistence."""
+
+    def __init__(self, dsn: str | None = None) -> None:
+        self.dsn = dsn or os.getenv("DATABASE_URL")
+
+        if not self.dsn:
+            raise RuntimeError(
+                "DATABASE_URL is not set. Add it to your .env file, e.g.\n"
+                "DATABASE_URL=postgresql://ai_resume_app:<password>@localhost:5432/ai_resume_screening"
+            )
+
         self.initialize()
 
     @contextmanager
-    def connection(self) -> Iterator[sqlite3.Connection]:
-        connection = sqlite3.connect(
-            self.db_path,
-            timeout=30,
-        )
-        connection.row_factory = sqlite3.Row
+    def connection(self) -> Iterator[psycopg.Connection]:
+        connection = psycopg.connect(self.dsn, row_factory=dict_row)
 
         try:
-            connection.execute("PRAGMA foreign_keys = ON")
-            connection.execute("PRAGMA journal_mode = WAL")
-            connection.execute("PRAGMA busy_timeout = 30000")
             yield connection
             connection.commit()
         except Exception:
@@ -67,89 +151,8 @@ class Database:
         """Create/update the application schema safely."""
 
         with self.connection() as connection:
-            connection.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS jobs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    job_id TEXT NOT NULL UNIQUE,
-                    title TEXT NOT NULL DEFAULT '',
-                    raw_text TEXT NOT NULL DEFAULT '',
-                    parsed_json TEXT NOT NULL DEFAULT '{}',
-                    created_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS candidates (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    candidate_id TEXT NOT NULL UNIQUE,
-                    original_filename TEXT NOT NULL,
-                    stored_filename TEXT,
-                    file_type TEXT,
-                    resume_path TEXT,
-                    anonymized_text TEXT NOT NULL DEFAULT '',
-                    profile_json TEXT NOT NULL DEFAULT '{}',
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS screening_runs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    run_id TEXT NOT NULL UNIQUE,
-                    job_id TEXT NOT NULL,
-                    status TEXT NOT NULL DEFAULT 'completed',
-                    candidate_count INTEGER NOT NULL DEFAULT 0,
-                    created_at TEXT NOT NULL,
-                    FOREIGN KEY (job_id) REFERENCES jobs(job_id)
-                        ON DELETE CASCADE
-                );
-
-                CREATE TABLE IF NOT EXISTS screening_results (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    run_id TEXT NOT NULL,
-                    candidate_id TEXT NOT NULL,
-                    final_score REAL NOT NULL DEFAULT 0,
-                    recommendation TEXT NOT NULL DEFAULT 'REVIEW',
-                    ml_prediction INTEGER,
-                    result_json TEXT NOT NULL DEFAULT '{}',
-                    recruiter_decision TEXT,
-                    recruiter_notes TEXT NOT NULL DEFAULT '',
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    UNIQUE (run_id, candidate_id),
-                    FOREIGN KEY (run_id) REFERENCES screening_runs(run_id)
-                        ON DELETE CASCADE,
-                    FOREIGN KEY (candidate_id) REFERENCES candidates(candidate_id)
-                        ON DELETE CASCADE
-                );
-
-                CREATE TABLE IF NOT EXISTS audit_events (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    event_id TEXT NOT NULL UNIQUE,
-                    event_type TEXT NOT NULL,
-                    run_id TEXT,
-                    candidate_id TEXT,
-                    details_json TEXT NOT NULL DEFAULT '{}',
-                    created_at TEXT NOT NULL
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_jobs_created_at
-                    ON jobs(created_at);
-
-                CREATE INDEX IF NOT EXISTS idx_candidates_created_at
-                    ON candidates(created_at);
-
-                CREATE INDEX IF NOT EXISTS idx_screening_results_run
-                    ON screening_results(run_id);
-
-                CREATE INDEX IF NOT EXISTS idx_screening_results_candidate
-                    ON screening_results(candidate_id);
-
-                CREATE INDEX IF NOT EXISTS idx_audit_events_run
-                    ON audit_events(run_id);
-
-                CREATE INDEX IF NOT EXISTS idx_audit_events_candidate
-                    ON audit_events(candidate_id);
-                """
-            )
+            for statement in SCHEMA_STATEMENTS:
+                connection.execute(statement)
 
     def save_job(
         self,
@@ -166,11 +169,11 @@ class Database:
                 INSERT INTO jobs (
                     job_id, title, raw_text, parsed_json, created_at
                 )
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(job_id) DO UPDATE SET
-                    title = excluded.title,
-                    raw_text = excluded.raw_text,
-                    parsed_json = excluded.parsed_json
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (job_id) DO UPDATE SET
+                    title = EXCLUDED.title,
+                    raw_text = EXCLUDED.raw_text,
+                    parsed_json = EXCLUDED.parsed_json
                 """,
                 (
                     job_id,
@@ -207,15 +210,15 @@ class Database:
                     created_at,
                     updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(candidate_id) DO UPDATE SET
-                    original_filename = excluded.original_filename,
-                    stored_filename = excluded.stored_filename,
-                    file_type = excluded.file_type,
-                    resume_path = excluded.resume_path,
-                    anonymized_text = excluded.anonymized_text,
-                    profile_json = excluded.profile_json,
-                    updated_at = excluded.updated_at
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (candidate_id) DO UPDATE SET
+                    original_filename = EXCLUDED.original_filename,
+                    stored_filename = EXCLUDED.stored_filename,
+                    file_type = EXCLUDED.file_type,
+                    resume_path = EXCLUDED.resume_path,
+                    anonymized_text = EXCLUDED.anonymized_text,
+                    profile_json = EXCLUDED.profile_json,
+                    updated_at = EXCLUDED.updated_at
                 """,
                 (
                     candidate_id,
@@ -247,7 +250,7 @@ class Database:
                     candidate_count,
                     created_at
                 )
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s)
                 """,
                 (
                     run_id,
@@ -269,11 +272,11 @@ class Database:
         values: list[Any] = []
 
         if status is not None:
-            updates.append("status = ?")
+            updates.append("status = %s")
             values.append(status)
 
         if candidate_count is not None:
-            updates.append("candidate_count = ?")
+            updates.append("candidate_count = %s")
             values.append(max(0, int(candidate_count)))
 
         if not updates:
@@ -286,7 +289,7 @@ class Database:
                 f"""
                 UPDATE screening_runs
                 SET {", ".join(updates)}
-                WHERE run_id = ?
+                WHERE run_id = %s
                 """,
                 values,
             )
@@ -315,13 +318,13 @@ class Database:
                     created_at,
                     updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(run_id, candidate_id) DO UPDATE SET
-                    final_score = excluded.final_score,
-                    recommendation = excluded.recommendation,
-                    ml_prediction = excluded.ml_prediction,
-                    result_json = excluded.result_json,
-                    updated_at = excluded.updated_at
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (run_id, candidate_id) DO UPDATE SET
+                    final_score = EXCLUDED.final_score,
+                    recommendation = EXCLUDED.recommendation,
+                    ml_prediction = EXCLUDED.ml_prediction,
+                    result_json = EXCLUDED.result_json,
+                    updated_at = EXCLUDED.updated_at
                 """,
                 (
                     run_id,
@@ -355,10 +358,10 @@ class Database:
             cursor = connection.execute(
                 """
                 UPDATE screening_results
-                SET recruiter_decision = ?,
-                    recruiter_notes = ?,
-                    updated_at = ?
-                WHERE run_id = ? AND candidate_id = ?
+                SET recruiter_decision = %s,
+                    recruiter_notes = %s,
+                    updated_at = %s
+                WHERE run_id = %s AND candidate_id = %s
                 """,
                 (
                     normalized,
@@ -395,7 +398,7 @@ class Database:
                     details_json,
                     created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 """,
                 (
                     event_id,
@@ -421,7 +424,7 @@ class Database:
                 FROM screening_results sr
                 JOIN candidates c
                     ON c.candidate_id = sr.candidate_id
-                WHERE sr.run_id = ?
+                WHERE sr.run_id = %s
                 ORDER BY sr.final_score DESC, sr.created_at ASC
                 """,
                 (run_id,),
@@ -457,7 +460,7 @@ class Database:
                 SELECT *
                 FROM screening_runs
                 ORDER BY created_at DESC
-                LIMIT ?
+                LIMIT %s
                 """,
                 (limit,),
             ).fetchall()

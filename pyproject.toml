@@ -22,6 +22,7 @@ dependencies = [
     "python-multipart>=0.0.32",
     "matplotlib>=3.11.1",
     "en-core-web-sm",
+    "psycopg[binary]>=3.3.5",
 ]
 
 [tool.uv]
