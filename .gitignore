@@ -38,3 +38,11 @@ tests/resumes_backup
 .vscode/
 .idea/
 .DS_Store
+# Personal documents
+Arjun_Posni_Data_Engineer_Analyst_ATS_Resume.pdf
+Arjun_Posni_GenAI_RAG_ATS_Resume.pdf
+arjun_posni_data_science resume.pdf
+arjun_posni_october resume.pdf
+
+# Local API specification
+openapi-local.json
